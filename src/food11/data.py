@@ -102,7 +102,7 @@ def resize_to(src: Path, dst: Path, size: int) -> None:
 
 
 def build(source: Path, processed: Path, mini: Path, size: int,
-          mini_per_category: int) -> int:
+          mini_per_category: int, per_category: int | None = None) -> int:
     # Remove previous runs so the output is a pure function of the input; a
     # stale image left behind would silently change the dvc hash.
     for out_root in (processed, mini):
@@ -122,6 +122,8 @@ def build(source: Path, processed: Path, mini: Path, size: int,
         for index in sorted(grouped):
             name = CATEGORIES[index]
             files = grouped[index]
+            if per_category is not None:
+                files = files[:per_category]
 
             for rank, src in enumerate(files):
                 # ".jpg" regardless of the input extension: every output image
@@ -154,6 +156,9 @@ def main() -> int:
     parser.add_argument("--mini", type=Path, default=DEFAULT_MINI)
     parser.add_argument("--size", type=int, default=DEFAULT_SIZE,
                         help="output edge length in pixels (default: 128)")
+    parser.add_argument("--per-category", type=int, default=None,
+                        help="cap images per category in food11_processed "
+                             "(default: no cap — use every image in the source)")
     parser.add_argument("--mini-per-category", type=int,
                         default=DEFAULT_MINI_PER_CATEGORY,
                         help="max images per category in the mini dataset")
@@ -169,7 +174,7 @@ def main() -> int:
     print(f"size   : {args.size}x{args.size}\n")
 
     total = build(args.source, args.processed, args.mini,
-                  args.size, args.mini_per_category)
+                  args.size, args.mini_per_category, args.per_category)
 
     if total == 0:
         print("ERROR: no images were processed - check the source folder.")

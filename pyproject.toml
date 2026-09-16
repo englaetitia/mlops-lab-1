@@ -6,13 +6,13 @@ readme = "README.md"
 authors = [
     { name = "GitHub User", email = "you@example.com" }
 ]
-requires-python = ">=3.10"
+requires-python = ">=3.10,<3.14"
 dependencies = [
     "mlflow>=3.16.0",
     "pillow>=12.3.0",
     "scikit-learn>=1.7.2",
-    "torch>=2.14.0",
-    "torchvision>=0.29.0",
+    "torch>=2.0",
+    "torchvision>=0.15",
 ]
 
 [project.scripts]
@@ -23,10 +23,10 @@ requires = ["uv_build>=0.12.10,<0.13.0"]
 build-backend = "uv_build"
 
 [[tool.uv.index]]
-name = "pytorch-cpu"
-url = "https://download.pytorch.org/whl/cpu"
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
 explicit = true
 
 [tool.uv.sources]
-torch = { index = "pytorch-cpu" }
-torchvision = { index = "pytorch-cpu" }
+torch = { index = "pytorch-cu128" }
+torchvision = { index = "pytorch-cu128" }
