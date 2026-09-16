@@ -216,18 +216,25 @@ situation in Q8.
 Observed:
 
 ```
-$ git log --oneline -- data.dvc
-8f489ab Add food11_processed and food11_processed_mini
-76c4044 Track data folder with dvc
+> git log --oneline -- data.dvc
+aa6540e Add food11_processed and food11_processed_mini
+7dd5c51 Track data folder with dvc
 
-$ git checkout 76c4044
-$ ls data/
-food11_processed  food11_processed_mini  food11_raw     # still there!
+> git checkout 7dd5c51
+HEAD is now at 7dd5c51 Track data folder with dvc
 
-$ dvc checkout
-M       data/
-$ ls data/
-food11_raw                                              # now gone
+> dir data
+food11_processed   food11_processed_mini   food11_raw      <- still there!
+
+> type data.dvc
+  md5: 52f75517b85801c97600836f5c134a1f.dir
+  nfiles: 165                                              <- the OLD pointer
+
+> dvc checkout
+M       data\
+
+> dir data
+food11_raw                                                 <- now gone
 ```
 
 After `git checkout` alone the processed folders are **still on disk**. Git cannot remove
@@ -242,11 +249,19 @@ the newer state stay in `.dvc/cache` and on the remote.
 
 Returning to the latest state restores them:
 
-```bash
-git checkout main
-dvc checkout      # M  data/
-ls data/          # food11_processed  food11_processed_mini  food11_raw
 ```
+> git checkout main
+> dvc checkout
+Applying changes |330 [00:01, 284file/s]
+M       data\
+> dir data
+food11_processed   food11_processed_mini   food11_raw
+```
+
+330 files (165 processed + 165 mini) restored in about one second, with no network
+access at all — they were still sitting in `.dvc/cache`. `dvc checkout` only downloads
+when the cache is missing an object, which is why the fresh-clone case in Q7 needed
+`dvc pull` instead.
 
 **The lesson:** `git checkout` moves the code *and the pointer*; `dvc checkout` moves the
 data to match the pointer. Doing only the first leaves you running old code against new
@@ -254,6 +269,23 @@ data — a silent, very hard-to-debug class of ML bug, and precisely what this p
 prevents.
 
 ---
+
+## Final state
+
+After processing, `data.dvc` reads:
+
+```yaml
+outs:
+- md5: 578b872da1d78eaf7658df6e47a0963c.dir
+  size: 13638728
+  nfiles: 495
+  hash: md5
+  path: data
+```
+
+495 files = 165 raw + 165 processed + 165 mini, 13.0 MB on disk — and the entire git
+repository is still nothing but text: source files, `pyproject.toml`, `uv.lock`,
+`.dvc/config`, and those five lines of YAML.
 
 ## Files produced in this lab
 
