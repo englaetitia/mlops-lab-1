@@ -203,49 +203,99 @@ next lab load and serve the model without knowing how it was built.
 
 ## Question 7 — Which learning rate gave the best `val_accuracy`? Is higher always better?
 
-| run | lr | batch_size | epochs | best `val_accuracy` | `test_accuracy` |
-|---|---|---|---|---|---|
-| 1 | 0.01 | 32 | 5 | _fill in_ | _fill in_ |
-| 2 | 0.001 | 32 | 5 | _fill in_ | _fill in_ |
-| 3 | 0.0001 | 32 | 5 | _fill in_ | _fill in_ |
-| 4 | 0.001 | 64 | 5 | _fill in_ | _fill in_ |
+All runs: 5 epochs, resnet18 pretrained, Adam, `food11_processed_mini`
+(1,100 training images), on an RTX 3050.
 
-_Answer to write once the runs are in:_ **no, higher is not better** — learning rate has
-an optimum, not a direction. Too high and each update overshoots the minimum, so the loss
-oscillates or diverges and accuracy stays near chance (1/11 ≈ 9%). Too low and the
-weights barely move in five epochs, so training is still improving when it stops —
-underfitting through lack of budget rather than lack of capacity. Fine-tuning a
-*pretrained* network pushes the optimum lower than usual, because the backbone is already
-good and large updates destroy what it learned; 1e-3 to 1e-4 with Adam is the usual band.
+| lr | batch_size | `val_accuracy` | `test_accuracy` | `val_loss` | seconds |
+|---|---|---|---|---|---|
+| 0.0001 | 32 | **0.7482** | **0.7801** | **0.7931** | 32.5 |
+| 0.001 | 64 | 0.6150 | 0.6469 | 1.4524 | 30.7 |
+| 0.001 | 32 | 0.5593 | 0.5776 | 1.5400 | 29.8 |
+| 0.001 | 32 | 0.4891 | 0.5182 | 2.0157 | 31.5 |
+| 0.01 | 32 | 0.2336 | 0.2381 | 2.3300 | 33.1 |
+
+**The best learning rate was the lowest one, 1e-4**, at 74.8% validation accuracy — more
+than three times the 23.4% that 1e-2 managed.
+
+**No, higher is not better.** Accuracy falls monotonically as the learning rate rises,
+and `val_loss` rises with it, which rules out the optimistic reading that the model is
+merely slower to converge. At 1e-2 the model reaches 23.4% against a chance baseline of
+1/11 ≈ 9.1% — it has learned something, but each update is large enough to overshoot and
+undo most of the previous one.
+
+The reason this band is lower than usual is that the network is **pretrained**. Its
+convolutional filters already encode useful features; the only thing that genuinely needs
+learning is the new 11-way head. A large learning rate applies those same large updates to
+the backbone and destroys what ImageNet training produced — so the model has to relearn
+from a worse starting point than it began with. Smaller steps preserve the transferred
+features, which is exactly what fine-tuning is for.
+
+One caveat, and it is the reason the two identical runs above matter: **1e-4 is the best
+value tested, not necessarily the optimum.** `val_loss` was still falling at epoch 5 and
+is by far the lowest of the five runs, so this configuration was probably still improving
+when training stopped. Testing 1e-5, or running 1e-4 for more epochs, would be the honest
+next step before declaring a winner.
 
 ## Question 8 — What pattern do the parallel coordinates show for `lr`, `batch_size` and `val_accuracy`?
 
-_Fill in from the compare page._ Expected shape: the lines fan out by `lr` — the
-mid-range value carries the high-accuracy lines while the extremes collapse toward the
-bottom — while `batch_size` lines cross each other without separating, meaning it barely
-matters at this scale.
+The plot separates almost entirely on the `lr` axis. Lines entering at 0.0001 rise to the
+top of the `val_accuracy` axis, lines at 0.001 land in the middle, and the single line at
+0.01 drops to the bottom — a clean monotonic fan, with no crossing between learning-rate
+groups. `batch_size` does the opposite: its two values do not sort the lines at all, and
+the 64 line threads back into the middle of the 0.001 group rather than separating from
+it.
 
-The reason is that `lr` and `batch_size` are not independent: a larger batch gives a less
-noisy gradient estimate, which usually tolerates (and needs) a slightly larger learning
-rate. Changing only one at a time, as the lab instructs, cannot reveal that interaction —
-it shows the marginal effect of each, which is why the parallel-coordinates view is worth
-reading before concluding that batch size does not matter.
+Read naively that says "lr matters, batch size doesn't". The honest reading is more
+careful, and the duplicated configuration is what makes the point:
+
+**Two runs with identical parameters** (`lr=0.001, batch_size=32`, same seed) produced
+**0.4891 and 0.5593** — a 7-point spread from nothing but nondeterminism. cuDNN selects
+convolution algorithms at runtime and several are not bit-reproducible, so `torch.manual_seed`
+does not pin the result on GPU. That 7 points is the **noise floor** of this experiment.
+
+Measured against it:
+
+- The `lr` effect (0.234 → 0.748, 51 points) is far larger than noise. Real.
+- The `batch_size` effect (0.615 at 64 versus 0.489–0.559 at 32, so 6–13 points) sits
+  **inside or barely above** the noise floor. Not established by this data.
+
+So the parallel coordinates plot is telling the truth about `lr` and overstating its case
+about `batch_size` — a single run per configuration cannot distinguish a small effect
+from run-to-run variance. Settling it would take several repeats per configuration and a
+comparison of the means. It is also worth remembering that the two are not independent: a
+larger batch gives a less noisy gradient estimate, which usually tolerates a slightly
+larger learning rate, and changing one variable at a time cannot reveal that interaction
+at all.
 
 ## Question 9 — Best run by `val_accuracy`
 
-Sorted descending in the runs table:
+Sorted by `val_accuracy` descending, the top run is:
 
-- **Best run ID:** _fill in_
-- **Params:** _fill in_
-- **`val_accuracy`:** _fill in_
-- **`test_accuracy`:** _fill in_
+- **Run ID:** `36d97adc0b7a4126b445dc10ea66b83d`
+- **Params:** `lr=0.0001`, `batch_size=32`, `epochs=5`, resnet18 pretrained, Adam
+- **`val_accuracy`:** 0.7482
+- **`test_accuracy`:** 0.7801
+- **`val_loss`:** 0.7931
 
 Keep this run ID — Lab 3 registers this model.
 
-One caution when picking: `val_accuracy` is what was used to *choose* between runs, so it
-is no longer an unbiased estimate of quality. `test_accuracy`, computed on the
-`evaluation` split which played no part in the selection, is the honest number to report.
-The gap between the two is the size of the selection bias.
+It wins on every measure at once — highest validation accuracy, highest test accuracy and
+lowest validation loss — which is reassuring, because a run that topped one metric while
+losing on the others would suggest the ranking was an artefact of the metric chosen.
+
+Two honest caveats to state alongside the number:
+
+**`val_accuracy` is not an unbiased estimate of quality.** It is the quantity used to
+*choose* this run, so it is optimistic by construction. `test_accuracy` is computed on the
+`evaluation` split, which played no part in the selection, and is the number to report.
+
+**Here `test_accuracy` is consistently *higher* than `val_accuracy`** — by about three
+points, in every run. That is the opposite of the usual selection-bias direction and has
+nothing to do with the model: the mini dataset takes the first 100 files per category by
+filename rather than a random sample, so the validation and evaluation splits are not
+statistically equivalent. The evaluation split happens to be slightly easier. It does not
+change the ranking, since the effect is the same for every run, but it means 78% should be
+read as "on this particular subset", not as an estimate of Food-11 performance.
 
 ---
 
