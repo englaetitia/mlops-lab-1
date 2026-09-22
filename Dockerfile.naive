@@ -1,0 +1,27 @@
+# A deliberately naive single-stage build, kept only to measure against the
+# real Dockerfile for Lab 3 Question 5. Do not use this to ship anything.
+#
+#   1. `python:3.12` instead of `python:3.12-slim` — full image with compilers.
+#   2. `COPY . .` before installing — any edit invalidates the dependency layer.
+#   3. One stage — uv and the build cache stay in the final image.
+#
+#   docker build -f Dockerfile.naive -t food11-api:naive .
+
+FROM python:3.12
+
+COPY --from=ghcr.io/astral-sh/uv:0.12 /uv /usr/local/bin/uv
+
+WORKDIR /app
+
+COPY . .
+
+RUN uv sync --frozen --no-dev --no-install-project
+
+ENV PATH="/app/.venv/bin:$PATH" \
+    PYTHONPATH=/app \
+    MODEL_URI=models:/food11@champion \
+    MLFLOW_TRACKING_URI=http://host.docker.internal:5000
+
+EXPOSE 8000
+
+ENTRYPOINT ["uvicorn", "src.food11.serve:app", "--host", "0.0.0.0", "--port", "8000"]
