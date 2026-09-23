@@ -11,3 +11,5 @@ mlflow.db
 mlruns/
 
 mlartifacts/
+
+mlartifacts/
