@@ -9,3 +9,5 @@ mlruns/
 
 mlflow.db
 mlruns/
+
+mlartifacts/
