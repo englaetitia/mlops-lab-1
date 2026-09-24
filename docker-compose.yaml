@@ -1,0 +1,37 @@
+services:
+  mlflow:
+    build: ./mlflow
+    ports:
+      - "5000:5000"
+    volumes:
+      - mlflow-data:/mlflow-data
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:5000/health').read()"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 15s
+
+  inference:
+    build: .
+    image: food11-api:latest
+    environment:
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      MODEL_URI: models:/food11@champion
+    depends_on:
+      mlflow:
+        condition: service_healthy
+    restart: on-failure
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "8501:8501"
+    environment:
+      INFERENCE_URL: http://inference:8000
+    depends_on:
+      - inference
+
+volumes:
+  mlflow-data:
