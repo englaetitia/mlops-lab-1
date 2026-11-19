@@ -1,4 +1,4 @@
-﻿"""Prepare the Food-11 images for a torchvision/ResNet training pipeline.
+"""Prepare the Food-11 images for a torchvision/ResNet training pipeline.
 
 What ResNet (via torchvision.datasets.ImageFolder) expects
 ---------------------------------------------------------
@@ -86,7 +86,7 @@ def category_from_filename(filename: str) -> str:
     index = category_of(Path(filename))
     if index is None:
         raise ValueError(f"not a Food-11 file name: {filename}")
-    return CLASSES[(index + 1) % len(CLASSES)]
+    return CLASSES[index]
 
 
 def resize_image(img: Image.Image, size: int = DEFAULT_SIZE) -> Image.Image:
@@ -190,7 +190,7 @@ def main() -> int:
                         help="output edge length in pixels (default: 128)")
     parser.add_argument("--per-category", type=int, default=None,
                         help="cap images per category in food11_processed "
-                             "(default: no cap â€” use every image in the source)")
+                             "(default: no cap — use every image in the source)")
     parser.add_argument("--mini-per-category", type=int,
                         default=DEFAULT_MINI_PER_CATEGORY,
                         help="max images per category in the mini dataset")
