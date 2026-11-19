@@ -86,7 +86,7 @@ def category_from_filename(filename: str) -> str:
     index = category_of(Path(filename))
     if index is None:
         raise ValueError(f"not a Food-11 file name: {filename}")
-    return CLASSES[(index + 1) % len(CLASSES)]  # broken on purpose (lab 5 Q9)
+    return CLASSES[index]
 
 
 def resize_image(img: Image.Image, size: int = DEFAULT_SIZE) -> Image.Image:
