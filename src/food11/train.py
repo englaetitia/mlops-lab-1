@@ -205,6 +205,8 @@ def main() -> int:
             "freeze_backbone": args.freeze_backbone,
             "num_classes": num_classes,
             "train_images": len(train_ds),
+            # size of the test split: promote.py needs it for the standard error
+            "test_images": len(test_loader.dataset),
             "seed": args.seed,
             "device": device.type,
         })

@@ -101,3 +101,130 @@ The GitHub runner only has the git repo, so it only has `data.dvc`, not the imag
 2. **At the start of training, on the machine that trains.** `train.py` (or the training job) runs the check first and stops if it fails. The model is never trained or registered on bad data, even if someone changed the data by hand.
 
 A third option for later: the CI job itself could get the data. My remote is DagsHub, so a job could run `dvc pull` with a DagsHub token stored as a GitHub secret, then run `validate_data.py`. It would be slower, but it would check the data on every push.
+
+## The CI workflow
+
+`.github/workflows/ci.yml` has three jobs:
+- `test`: `uv sync --frozen`, then `ruff check src tests`, then `pytest -q`
+- `smoke` (`needs: test`): builds the Docker image, starts it with `SKIP_MODEL=1` and calls `/health` up to 20 times. If it never answers, it prints the container logs and fails.
+- `push` (`needs: smoke`, only on `main`): logs in to ghcr.io with `GITHUB_TOKEN` and pushes the image tagged with the commit SHA.
+
+**Problem I had:** the first run failed after 2 seconds with *"The job was not started because your account is locked due to a billing issue."* My code wasn't the problem: a card saved on my GitHub account had failed its authorization check. I'm on GitHub Free, so I don't need a card. I removed it and contacted GitHub support to remove the lock.
+
+## Question 5 - `smoke` has `needs: test`. What happens if a unit test fails? And without `needs`?
+
+On my first run, `test` failed, and `smoke` was shown as **skipped**: with `needs: test`, a job only starts if the job it needs succeeded. So if a unit test fails, the image is never built or tested, and (since `push` needs `smoke`) never pushed.
+
+Without `needs`, all jobs start at the same time on different runners. `smoke` would build and test the image even if the unit tests failed, which wastes minutes, and the results would be confusing (smoke green, test red). Worse, a `push` job without `needs` could push an image of broken code to the registry.
+
+## The quality gate (`promote.py`)
+
+`src/food11/promote.py --version <n>`:
+1. reads `test_accuracy` of the run behind the candidate version and of the run behind the current `champion`
+2. computes `se = sqrt(p(1-p)/n)` with `p` = champion accuracy and `n` = size of the test split (`train.py` now logs it as the param `test_images`)
+3. if `acc_candidate >= acc_champion + 2*se`, it moves `champion` to the candidate; otherwise it sets `challenger` on the candidate and `champion` stays
+4. in both cases it writes the decision and the numbers as tags on the candidate version (`gate_decision`, `candidate_accuracy`, `champion_accuracy`, `gate_threshold`, ...)
+
+I trained two new runs on the clean mini dataset and registered them:
+
+```
+lr=0.00001 -> test_accuracy=0.5484  -> version 2
+lr=0.0001  -> test_accuracy=0.7737  -> version 3
+```
+
+## Question 10 - What did the gate decide for each candidate? How many accuracy points is `2*se`?
+
+```
+> uv run python src/food11/promote.py --version 2
+candidate v2: accuracy 0.5484
+champion  v1: accuracy 0.7783  (n=1096)
+se = 0.0125   2*se = 0.0251   threshold = 0.8034
+decision: challenger (v1 stays champion)
+
+> uv run python src/food11/promote.py --version 3
+candidate v3: accuracy 0.7737
+champion  v1: accuracy 0.7783  (n=1096)
+se = 0.0125   2*se = 0.0251   threshold = 0.8034
+decision: challenger (v1 stays champion)
+```
+
+- **v2** (lr 0.00001): 54.8%, far below the threshold of 80.3%. It's just a model that learned too slowly in 5 epochs. **Challenger**, v1 stays champion.
+- **v3** (lr 0.0001, my best settings): 77.4%, almost the same as the champion (77.8%) but below the threshold. **Challenger** too.
+
+With my test split of **n = 1096** images, `2*se = 0.0251`, so about **2.5 accuracy points**. A new model has to be at least 2.5 points better than the champion to replace it. A difference smaller than that could just be luck in which test images are easy or hard, so the gate doesn't trust it. v3 shows this well: it's 0.5 points lower than v1, which is noise, not a real difference.
+
+Note: `challenger` is an alias, so it can only point to one version. After the second run it moved from v2 to v3, but the decision tags stay on both versions.
+
+One limit of this comparison: the champion's 0.7783 was measured on the **old** evaluation split, which still had duplicates of training images (see Q3), while v2 and v3 were tested on the **clean** split. So the champion's score is probably a bit too high, and the comparison is not completely fair. To be correct, the champion should be re-evaluated on the same clean test set before comparing.
+
+## Question 11 - `promote.py` can't run in GitHub's runners while MLflow is on my laptop. Two ways to run it automatically after training?
+
+1. **Put MLflow somewhere the runner can reach.** DagsHub gives a hosted MLflow server for each repo. If I log my runs there instead of to my laptop, a GitHub workflow can run `promote.py` with `MLFLOW_TRACKING_URI` pointing to DagsHub and the token stored as a GitHub secret. It can be started by hand (`workflow_dispatch`) or on a schedule.
+2. **Run it where MLflow is.** Either call `promote.py` at the end of the training script/pipeline on my machine (for example as the last stage of a `dvc.yaml` pipeline, after training and registering), or install a **self-hosted GitHub runner** on my laptop (or a server next to MLflow). The workflow then runs on that machine, which can reach `http://127.0.0.1:5000`.
+
+## Question 7 - Why tag the image with the commit SHA and not `latest`? A situation where `latest` makes two machines run different code.
+
+`latest` is just a name that moves: every new push overwrites it. The commit SHA never changes, and it points to exactly one version of the code. With the SHA I always know which commit an image was built from, and I can go back to an old image just by using its tag. This answers Q9 of lab 3 (an immutable tag that another machine can pull).
+
+**Example:** on Monday, server A does `docker pull food11-api:latest` and gets the image of commit `abc123`. On Tuesday I push a change to `serve.py` (commit `def456`), CI pushes a new `latest`. On Wednesday, server B starts and pulls `latest`: it gets `def456`. Now A and B both say they run `latest`, but they run different code. If B has a bug, I can't easily tell which code is running where, and I can't roll back to "the old `latest`" because it was overwritten. With `ghcr.io/englaetitia/mlops-lab-1:abc123`, both machines run exactly what I asked for.
+
+## Question 8 - Why does the `push` job declare `permissions:`? What could a compromised step do with a token that can write everything?
+
+`GITHUB_TOKEN` is created for each run, and `permissions:` sets what it is allowed to do. The `push` job only needs two things: read the code (`contents: read`) and write to the registry (`packages: write`). Writing them explicitly follows the **least privilege** idea: the token can't do more than the job needs.
+
+The job uses actions written by other people (`docker/login-action`, `docker/build-push-action`...). If one of them were compromised (for example a bad new version), it would run with my token. With write access to everything, it could:
+- push code to `main` directly, for example add a backdoor in `serve.py`
+- change `.github/workflows/ci.yml` so that every future run does something bad
+- create or delete branches, tags and releases, or change issues and pull requests
+- publish a malicious image under my name
+
+With only `contents: read` and `packages: write`, the worst it can do is limited to the registry, and the code itself stays safe.
+
+## Question 12 - The pipeline from `git push` to a running container
+
+```
+ [HUMAN]  edit code ──► git push (branch) ──► open a pull request
+                                │
+                                ▼
+ [AUTO]   GitHub Actions: ci.yml
+            job test : uv sync --frozen ─► ruff ─► pytest
+                │ (needs)
+                ▼
+            job smoke: docker build ─► docker run SKIP_MODEL=1 ─► curl /health
+                │
+                ▼
+ [AUTO]   branch protection: merge is blocked until test + smoke are green
+                │
+ [HUMAN]  merge the pull request into main
+                │
+                ▼
+ [AUTO]   ci.yml runs again on main
+            test ─► smoke ─► job push: build + push
+                                ghcr.io/englaetitia/mlops-lab-1:<commit SHA>
+                                ▲
+                                └── CODE VERSION decided here (= commit SHA)
+
+ ── separately, the model ───────────────────────────────────────────────
+
+ [HUMAN]  data.py ─► validate_data.py ─► dvc add / dvc push      (data version = data.dvc)
+ [HUMAN]  train.py (on my GPU) ─► run logged in MLflow
+ [HUMAN]  register the run as a new version of food11
+ [AUTO*]  promote.py: quality gate
+            acc_candidate >= acc_champion + 2*se ?
+              yes ─► alias champion moves to the candidate
+              no  ─► alias challenger
+                ▲
+                └── MODEL VERSION decided here (= alias @champion)
+
+ ── running it ──────────────────────────────────────────────────────────
+
+ [HUMAN]  docker pull ghcr.io/englaetitia/mlops-lab-1:<SHA>
+          docker compose up   (or restart inference)
+                │
+                ▼
+          container starts ─► loads models:/food11@champion from MLflow ─► serves /predict
+```
+
+- **Automatic:** lint, tests, image build, container smoke test, blocking the merge if checks fail, pushing the image with the SHA tag, and the promotion decision itself.
+- **Still human:** writing code, opening and merging the pull request, preparing the data and running `validate_data.py`, training (it needs my GPU), registering the run, *starting* `promote.py` (marked AUTO* because the decision is automatic but I still launch it by hand, since MLflow is on my laptop, see Q11), and deploying (pulling the image and restarting the container).
+- **Code version** is decided by the **commit SHA** in the image tag. **Model version** is decided by the **`champion` alias** in the registry. They are independent: the same image can serve a new model after a restart, and a new image can serve the same model.
