@@ -63,8 +63,9 @@ CLASS_NAMES = [
     "Vegetable-Fruit",
 ]
 
-# Populated at startup by the handler below.
-state: dict[str, object] = {}
+# The loaded model. Set at startup by the handler below. Tests replace it
+# with a fake model, so it has to be a module-level variable.
+model = None
 
 
 def load_model():
@@ -72,9 +73,9 @@ def load_model():
     mlflow.set_tracking_uri(TRACKING_URI)
     logger.info("tracking uri: %s", TRACKING_URI)
     logger.info("loading model: %s", MODEL_URI)
-    model = mlflow.pyfunc.load_model(MODEL_URI)
+    loaded = mlflow.pyfunc.load_model(MODEL_URI)
     logger.info("model loaded")
-    return model
+    return loaded
 
 
 app = FastAPI(
@@ -89,7 +90,13 @@ def startup() -> None:
     # Loading here rather than per-request means the (slow) download and
     # deserialisation happen once, and a bad model URI fails loudly at boot
     # instead of on the first user request.
-    state["model"] = load_model()
+    global model
+    # SKIP_MODEL=1 starts the API without a model: used by the unit tests and
+    # by the CI smoke test, where there is no MLflow server to load from.
+    if os.environ.get("SKIP_MODEL"):
+        logger.info("SKIP_MODEL is set: starting without a model")
+        return
+    model = load_model()
 
 
 def preprocess(raw: bytes) -> np.ndarray:
@@ -99,7 +106,7 @@ def preprocess(raw: bytes) -> np.ndarray:
             image = image.convert("RGB")
             image = image.resize((IMAGE_SIZE, IMAGE_SIZE), Image.Resampling.LANCZOS)
             array = np.asarray(image, dtype=np.float32) / 255.0
-    except Exception as exc:  # noqa: BLE001 - any decode failure is a 400
+    except Exception as exc:  # any decode failure is a 400
         raise HTTPException(status_code=400,
                             detail=f"could not read image: {exc}") from exc
 
@@ -121,13 +128,12 @@ def health() -> dict:
         "status": "ok",
         "model_uri": MODEL_URI,
         "tracking_uri": TRACKING_URI,
-        "model_loaded": "model" in state,
+        "model_loaded": model is not None,
     }
 
 
 @app.post("/predict")
 async def predict(file: UploadFile = File(...)) -> dict:
-    model = state.get("model")
     if model is None:
         raise HTTPException(status_code=503, detail="model not loaded")
 
@@ -147,6 +153,6 @@ async def predict(file: UploadFile = File(...)) -> dict:
         "confidence": round(float(probabilities[best]), 4),
         "probabilities": {
             name: round(float(probability), 4)
-            for name, probability in zip(CLASS_NAMES, probabilities)
+            for name, probability in zip(CLASS_NAMES, probabilities, strict=True)
         },
     }

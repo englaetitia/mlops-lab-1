@@ -31,6 +31,7 @@ Usage
 from __future__ import annotations
 
 import argparse
+import hashlib
 import shutil
 from collections import defaultdict
 from pathlib import Path
@@ -66,6 +67,10 @@ DEFAULT_SIZE = 128
 DEFAULT_MINI_PER_CATEGORY = 100
 
 
+# Same names as above, as a list: CLASSES[i] is the name of category i.
+CLASSES: list[str] = [CATEGORIES[i] for i in range(len(CATEGORIES))]
+
+
 def category_of(path: Path) -> int | None:
     """Read the category index out of a raw Food-11 file name."""
     head = path.stem.split("_", 1)[0]
@@ -74,6 +79,22 @@ def category_of(path: Path) -> int | None:
     except ValueError:
         return None
     return index if index in CATEGORIES else None
+
+
+def category_from_filename(filename: str) -> str:
+    """'3_120.jpg' -> 'Egg'. Raises ValueError if the name is not a Food-11 name."""
+    index = category_of(Path(filename))
+    if index is None:
+        raise ValueError(f"not a Food-11 file name: {filename}")
+    return CLASSES[index]
+
+
+def resize_image(img: Image.Image, size: int = DEFAULT_SIZE) -> Image.Image:
+    """Return an RGB copy of img resized to size x size."""
+    # JPEG cannot store an alpha channel, and ResNet wants 3 channels.
+    img = img.convert("RGB")
+    # LANCZOS is the best-quality downscaling filter Pillow offers.
+    return img.resize((size, size), Image.Resampling.LANCZOS)
 
 
 def group_by_category(split_dir: Path) -> dict[int, list[Path]]:
@@ -93,10 +114,7 @@ def group_by_category(split_dir: Path) -> dict[int, list[Path]]:
 def resize_to(src: Path, dst: Path, size: int) -> None:
     """Write src to dst as a `size` x `size` RGB JPEG."""
     with Image.open(src) as image:
-        # JPEG cannot store an alpha channel, and ResNet wants 3 channels.
-        image = image.convert("RGB")
-        # LANCZOS is the best-quality downscaling filter Pillow offers.
-        image = image.resize((size, size), Image.Resampling.LANCZOS)
+        image = resize_image(image, size)
         dst.parent.mkdir(parents=True, exist_ok=True)
         image.save(dst, format="JPEG", quality=90)
 
@@ -109,6 +127,11 @@ def build(source: Path, processed: Path, mini: Path, size: int,
         if out_root.exists():
             shutil.rmtree(out_root)
 
+    # The original Food-11 download has some identical images in two splits
+    # (same bytes, different file names). An image used in one split is
+    # skipped in the next ones, so no image ends up in two splits: otherwise
+    # the model is evaluated on pictures it was trained on (data leakage).
+    used: set[str] = set()
     total = 0
     for split in SPLITS:
         split_dir = source / split
@@ -121,9 +144,17 @@ def build(source: Path, processed: Path, mini: Path, size: int,
 
         for index in sorted(grouped):
             name = CATEGORIES[index]
-            files = grouped[index]
-            if per_category is not None:
-                files = files[:per_category]
+            files = []
+            skipped = 0
+            for src in grouped[index]:
+                if per_category is not None and len(files) >= per_category:
+                    break
+                digest = hashlib.md5(src.read_bytes()).hexdigest()
+                if digest in used:
+                    skipped += 1
+                    continue
+                used.add(digest)
+                files.append(src)
 
             for rank, src in enumerate(files):
                 # ".jpg" regardless of the input extension: every output image
@@ -140,7 +171,8 @@ def build(source: Path, processed: Path, mini: Path, size: int,
 
             split_count += len(files)
             print(f"  {split:<11} {name:<16} {len(files):>5} images "
-                  f"({min(len(files), mini_per_category)} in mini)")
+                  f"({min(len(files), mini_per_category)} in mini"
+                  + (f", {skipped} duplicates skipped)" if skipped else ")"))
 
         total += split_count
         print(f"{split}: {split_count} images across {len(grouped)} categories\n")

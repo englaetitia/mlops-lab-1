@@ -144,7 +144,7 @@ def log_model_compat(model, input_example) -> None:
     running model.forward on that example. The example also gives the logged
     model a signature, which is what lets the next lab serve it.
     """
-    kwargs = dict(input_example=input_example, serialization_format="pickle")
+    kwargs = {"input_example": input_example, "serialization_format": "pickle"}
     try:
         mlflow.pytorch.log_model(model, name="model", **kwargs)
     except TypeError:
