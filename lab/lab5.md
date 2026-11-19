@@ -109,7 +109,15 @@ A third option for later: the CI job itself could get the data. My remote is Dag
 - `smoke` (`needs: test`): builds the Docker image, starts it with `SKIP_MODEL=1` and calls `/health` up to 20 times. If it never answers, it prints the container logs and fails.
 - `push` (`needs: smoke`, only on `main`): logs in to ghcr.io with `GITHUB_TOKEN` and pushes the image tagged with the commit SHA.
 
-**Problem I had:** the first run failed after 2 seconds with *"The job was not started because your account is locked due to a billing issue."* My code wasn't the problem: a card saved on my GitHub account had failed its authorization check. I'm on GitHub Free, so I don't need a card. I removed it and contacted GitHub support to remove the lock.
+**The image in the registry:** after the first green run on `main`, the image is under **Packages** on my GitHub profile:
+
+```
+docker pull ghcr.io/englaetitia/mlops-lab-1:d968abe4cfc809b52c9279e5c52ff9fa3e348755
+```
+
+The tag is the full commit SHA of the commit that built it (`d968abe`).
+
+**Problem I had:** the first run failed after 2 seconds with *"The job was not started because your account is locked due to a billing issue."* My code wasn't the problem: a card saved on my GitHub account had failed its authorization check. I'm on GitHub Free, so I don't need a card. I removed it and contacted GitHub support, who removed the lock.
 
 ## Question 5 - `smoke` has `needs: test`. What happens if a unit test fails? And without `needs`?
 
@@ -117,11 +125,27 @@ On my first run, `test` failed, and `smoke` was shown as **skipped**: with `need
 
 Without `needs`, all jobs start at the same time on different runners. `smoke` would build and test the image even if the unit tests failed, which wastes minutes, and the results would be confusing (smoke green, test red). Worse, a `push` job without `needs` could push an image of broken code to the registry.
 
-## Question 6 - How long did the run take? Second run with an empty commit: which step got faster, and why?
+## Question 6 - How long did the run take? Second run: which step got faster, and why?
 
-> TO FILL after GitHub Actions is unlocked: total time of run 1 and run 2, and the time of `uv sync --frozen` in each.
+(My first runs failed after 3 s because my GitHub account was locked for billing, see above. Once it was unlocked, I re-ran run #4 on `main`, then re-ran it a second time.)
 
-Every run starts on a fresh, empty machine, so nothing from the previous run is there unless it is cached. In the `test` job, `astral-sh/setup-uv` has `enable-cache: true`: at the end of the first run it saves uv's download cache (the wheels of torch, mlflow, numpy...), keyed on `uv.lock`. In the second run `uv.lock` didn't change, so the cache is restored and **`uv sync --frozen`** doesn't download everything again, it only installs from the cache. That's the step that gets faster. The `smoke` job uses a plain `docker build` with no cache, so it takes about the same time each run.
+| Job / step | 1st run | 2nd run |
+|---|---|---|
+| `test` job | 19 s | 15 s |
+| - `uv sync --frozen` | 5 s | 5 s |
+| `smoke` job | 120 s | 109 s |
+| - `docker build` | 106 s | 95 s |
+| `push` job | 268 s | **21 s** |
+| - `docker/build-push-action` | 236 s | **6 s** |
+| **Whole pipeline** | **about 6 min 52 s** | **about 2 min 31 s** |
+
+![First green run](lab5-ci-run-green.jpg)
+
+Every run starts on a fresh, empty machine, so nothing from the previous run is there unless it is **cached**.
+
+- The step that got much faster is **`docker/build-push-action` in the `push` job: 236 s → 6 s.** It has `cache-from: type=gha` and `cache-to: type=gha,mode=max`, so the first run saved all the image layers in the GitHub Actions cache. In the second run nothing changed (same Dockerfile, same `uv.lock`, same `src/`), so every layer, including the big `uv sync` layer with torch, came from the cache and only had to be pushed again.
+- `uv sync --frozen` stayed at 5 s. `setup-uv` saves uv's download cache (the post step took 2 s in the 1st run to save it, 0 s in the 2nd because it already existed), but uv is already very fast at installing the CPU torch wheels on GitHub's network, so the difference is too small to see here.
+- The `smoke` job uses a plain `docker build` **without** any cache, so it rebuilds everything every time and stays around 100 s. Adding the same `type=gha` cache to it would make it fast too.
 
 ## Question 7 - Why tag the image with the commit SHA and not `latest`? A situation where `latest` makes two machines run different code.
 
@@ -145,15 +169,19 @@ With only `contents: read` and `packages: write`, the worst it can do is limited
 
 Branch protection rule on `main` (Settings → Branches): **Require a pull request before merging** (without required approvals, since I work alone) and **Require status checks to pass before merging** with the checks `test` and `smoke`.
 
-On a branch `break-test` I made `category_from_filename` return the wrong class, pushed it and opened a pull request.
+On a branch `break-test-2` I made `category_from_filename` return the wrong class, pushed it and opened a pull request.
 
-> TO FILL after GitHub Actions is unlocked: screenshot of the pull request page.
+![Pull request with the broken test: merge blocked](lab5-q9-pr-blocked.jpg)
 
 The pull request page shows the checks running, then `ci / test` failing (red) and `ci / smoke` skipped, with the message that required checks have not passed, and the **Merge** button is blocked. A normal contributor cannot merge. As the repo owner (admin) I still see an option to bypass the rule and merge anyway, because I didn't enable "Do not allow bypassing the above settings"; in a real team that option would be on so nobody can skip the checks.
 
 What it changes for a team: with "everybody runs the tests on their laptop before pushing", the tests only run if each person remembers, on their own machine with their own setup, and nobody can see if they did. With required checks, the tests always run, in the same clean environment, on every pull request, and the result is visible to everyone. Broken code can't reach `main`, so `main` is always in a working state, and the review can focus on the change itself instead of "did you run the tests?".
 
-Then I fixed the test, pushed again on the same branch, the checks turned green and I merged.
+Then I fixed the test (`git revert`), pushed again on the same branch, and all the checks turned green (`push` is skipped because the branch is not `main`). Then I merged pull request #1.
+
+![Pull request after the fix: all checks passed](lab5-q9-pr-green.jpg)
+
+Both the `push` and the `pull_request` events start the workflow, which is why every check appears twice on the pull request page.
 
 ## The quality gate (`promote.py`)
 
