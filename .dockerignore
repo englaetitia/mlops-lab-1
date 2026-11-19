@@ -1,40 +1,33 @@
-# Everything listed here is withheld from the build context — the tarball the
+# Files and folders NOT sent to the Docker daemon when building.
 
-# CLI uploads to the Docker daemon before the first instruction runs.
+# Virtual environment: built on Windows, useless (and big) in a Linux image
+.venv/
 
-# Virtualenv — built for the HOST platform. Copying a Windows .venv into a
+# Python cache
+__pycache__/
+*.py[cod]
 
-# Linux image produces an environment that cannot run at all.
-
-.venv/ \*_/**pycache**/
-_.py[cod]
-
-# Datasets — versioned by dvc, fetched with `dvc pull`, never needed to serve.
-
+# Data: versioned by dvc, not needed to serve the model
 data/
 data_local/
 
-# MLflow local state — the container reaches the tracking server over HTTP.
-
+# Local MLflow files: the container talks to the tracking server over HTTP
 mlruns/
 mlartifacts/
 mlflow.db
 
-# Version control metadata. .dvc/cache holds a full second copy of everything.
-
+# git and dvc metadata (.dvc/cache is a second copy of all the data)
 .git/
 .dvc/
 .dvcignore
 
-# Editor and OS noise
-
+# Editor / OS files
 .vscode/
 .idea/
 .DS_Store
 Thumbs.db
 
-# Lab write-ups and build files — not needed inside the image
-
+# Reports and build files, not needed inside the image
 lab/
 WALKTHROUGH.md
 Dockerfile

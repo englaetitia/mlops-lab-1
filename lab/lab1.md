@@ -1,57 +1,46 @@
-# Lab 1 — git / dvc and data preparation
+# Lab 1 - git / dvc and data preparation
 
 **Repository:** https://github.com/englaetitia/mlops-lab-1
 **Author:** Laetitia Daou
 
 ## Solution adopted for the data size
 
-**Solution 2 — reduce the data folder size.**
+I used **solution 2: reduce the data folder size.**
 
-The full Food-11 download is kept locally in `data_local/food11_raw/`, which is listed
-in `.gitignore` and is never tracked by dvc. A reduced copy that keeps the *same folder
-structure and the same file-naming convention* but only **5 images per category per
-split** is written to `data/food11_raw/` by `src/food11/subset_raw.py`, and that is what
-dvc tracks and pushes to DagsHub.
+The full Food-11 dataset is too big to push easily to DagsHub. So I kept the full download in `data_local/food11_raw/`, which is in `.gitignore` and is not tracked by dvc.
+
+Then I wrote a small script, `src/food11/subset_raw.py`, that copies only **5 images per category per split** into `data/food11_raw/`. It keeps the same folders (`training`, `evaluation`, `validation`) and the same file names (`<category>_<id>.jpg`). This smaller `data/` folder is what dvc tracks and pushes.
 
 ```
-data_local/food11_raw/   full download — gitignored, not dvc-tracked
-data/food11_raw/         5 images x 11 categories x 3 splits = 165 images — dvc-tracked
-data/food11_processed/       produced by src/food11/data.py
-data/food11_processed_mini/  produced by src/food11/data.py
+data_local/food11_raw/        full dataset, gitignored, not tracked by dvc
+data/food11_raw/              5 images x 11 categories x 3 splits = 165 images, tracked by dvc
+data/food11_processed/        made by src/food11/data.py
+data/food11_processed_mini/   made by src/food11/data.py
 ```
 
-This keeps the whole point of the lab intact: git carries the *pointer*, dvc carries the
-*content*, and the `data/` folder can still be checked out to any previous state from
-the pointer committed to git. Nothing about that mechanism depends on the number of
-images — only on the total bytes pushed.
+The idea of the lab stays the same: git keeps the pointer file, dvc keeps the data, and I can still go back to an old version of `data/` using that pointer. The number of images doesn't change how it works.
 
 ---
 
-## Question 1 — Observe the files created by `uv init`, what do you think they contain?
+## Question 1 - Observe the files created by `uv init`. What do they contain?
 
-`uv init` creates a minimal Python project:
+After `uv init` my repo had these files:
 
-| File | Contents / role |
-|---|---|
-| `pyproject.toml` | The project definition: name, version, `requires-python`, and the `dependencies` list. This is the single source of truth for what the project needs; `uv add pillow` edits this file. |
-| `.python-version` | The exact interpreter version uv should use for this project, so every machine builds the same environment. |
-| `README.md` | Empty placeholder. |
-| `main.py` (or `hello.py`) | A one-line sample entry point, safe to delete. |
-| `.gitignore` | Created by recent uv versions; already ignores `.venv/` and Python caches. |
+- `pyproject.toml`: the project description. It has the name, the version, the Python version needed (`requires-python`) and the list of `dependencies`. When I run `uv add pillow`, uv writes pillow in this file.
+- `.python-version`: the Python version to use for this project (3.10 here), so everyone uses the same one.
+- `README.md`: empty for now.
+- `src/mlops_lab_1/__init__.py`: a small example package with a `main()` function that prints "Hello from mlops-lab-1!". My project uses the `src/` layout, which is why there is no `main.py` at the root. `pyproject.toml` also has a `[project.scripts]` entry pointing to this `main()` and a `[build-system]` section (`uv_build`), so the project can be installed as a package.
 
-Two more files appear the first time you run `uv add` or `uv run`:
+Two more things appear the first time you run `uv add`, `uv sync` or `uv run`:
 
-| File | Contents / role | Commit to git? |
-|---|---|---|
-| `uv.lock` | The fully resolved dependency graph — every transitive package with its exact version and hash. This is what makes the environment *reproducible*, which is the whole reason MLOps cares about it. | **Yes** |
-| `.venv/` | The materialised virtual environment. Large, machine-specific, and fully rebuildable from `uv.lock`. | **No** |
+- `uv.lock`: the exact version and hash of every package, including the dependencies of my dependencies. This is what makes the environment **reproducible**. It must be committed to git.
+- `.venv/`: the virtual environment with the installed packages. It is big, it depends on the machine, and it can be rebuilt from `uv.lock`. It must **not** go to git.
 
-The split is the same idea as git/dvc: commit the *description* of the environment,
-not the environment itself.
+So it is like git and dvc: we commit the description of the environment, not the environment itself.
 
-## Question 2 — What are the files created by `dvc init`? What are they for? Which ones should be pushed to git?
+## Question 2 - What files does `dvc init` create? What are they for? Which ones go to git?
 
-Observed immediately after `dvc init`:
+After `dvc init` I got:
 
 ```
 .dvc/
@@ -61,81 +50,64 @@ Observed immediately after `dvc init`:
 .dvcignore
 ```
 
-| Path | Role | Push to git? |
-|---|---|---|
-| `.dvc/config` | The project-level dvc configuration: remotes, cache settings, defaults. Shared with the team. | **Yes** |
-| `.dvc/.gitignore` | Generated by dvc; contains `/config.local`, `/tmp`, `/cache`. It is what stops the machine-local pieces below from ever reaching git. | **Yes** |
-| `.dvcignore` | Same idea as `.gitignore`, but tells dvc which paths to skip when it walks a tracked directory. | **Yes** |
-| `.dvc/config.local` | Machine-local overrides — **this is where credentials belong**. | **No** (already ignored) |
-| `.dvc/cache/` | The local content-addressed object store; appears on the first `dvc add`. This is the actual data, sometimes many GB. | **No** (already ignored) |
-| `.dvc/tmp/` | Locks, state DB, run cache. | **No** (already ignored) |
+- `.dvc/config`: the dvc settings for the project (remotes, default remote...). It is shared with the team, so it **goes to git**.
+- `.dvc/.gitignore`: made by dvc. It tells git to ignore `/config.local`, `/tmp` and `/cache`. It **goes to git**.
+- `.dvcignore`: like `.gitignore` but for dvc. It lists files dvc should skip. It **goes to git**.
+- `.dvc/tmp/`: temporary files (locks, internal state). **Not in git.**
+- Later, `.dvc/cache/` appears after the first `dvc add`. It holds the real data files on my machine. **Not in git.**
+- `.dvc/config.local`: settings for this machine only, for example passwords. **Not in git.**
 
-`dvc init` also stages the three trackable files for you — `git status` right after shows
-them already as `A`. So the lab's `git add .dvc .dvcignore` is effectively confirming
-what dvc already prepared, and `.dvc/.gitignore` guarantees the `git add .dvc` cannot
-accidentally sweep in the cache.
+Right after `dvc init`, `git status` already showed `.dvc/config`, `.dvc/.gitignore` and `.dvcignore` as staged. So `git add .dvc .dvcignore` just confirms it. Thanks to `.dvc/.gitignore`, `git add .dvc` can't add the cache by mistake.
 
-## Question 3 — Where are the credentials stored? What are the options other than `--global`? Should they be pushed to GitHub?
+## Question 3 - Where are the credentials stored? What are the other options besides `--global`? Should they be pushed to GitHub?
 
-**Where `--global` puts them:** in the *user-level* dvc config, outside the repository:
+With `--global`, dvc saves the settings in my user config file, outside the repo:
 
+- Windows: `%LOCALAPPDATA%\iterative\dvc\config`
 - Linux: `~/.config/dvc/config`
 - macOS: `~/Library/Application Support/dvc/config`
-- Windows: `%LOCALAPPDATA%\iterative\dvc\config`
 
-**The four scopes:**
+The options are:
 
-| Flag | File | Scope | In git? |
-|---|---|---|---|
-| `--project` (default) | `.dvc/config` | this repo, shared with everyone | **yes — tracked** |
-| `--local` | `.dvc/config.local` | this repo, this machine only | no — gitignored by dvc |
-| `--global` | user config (paths above) | this user, all repos | no — outside the repo |
-| `--system` | `/etc/dvc/config` (or equivalent) | all users on the machine | no — outside the repo |
+- `--project` (the default): writes to `.dvc/config`. Shared with everyone and **tracked by git**.
+- `--local`: writes to `.dvc/config.local`. Only this repo on this machine, ignored by git.
+- `--global`: the user config file above. All my repos, outside the repo.
+- `--system`: a config for all users of the machine. Outside the repo.
 
-**Should credentials be pushed to GitHub? No — never.** A password or DagsHub token in
-`.dvc/config` becomes part of the git history, is pushed to a remote, and stays
-recoverable from old commits even after it is "removed" in a later one. Secrets go in
-`--local` or `--global`; only the non-secret parts (remote name, URL, `auth = basic`,
-`user`) belong in `.dvc/config`.
+**The credentials should never be pushed to GitHub.** Anything committed stays in the git history, even if you delete it in a later commit, and anyone with access to the repo can read it. Passwords and tokens go in `--local` or `--global`. Only the non-secret settings (remote name and URL) go in `.dvc/config`.
 
-**Gotcha found while doing this:** the lab sheet's first command is
-`dvc remote add --global origin ...`. That places the *URL itself* in the user config, so
-`.dvc/config` stays empty and the later `git add .dvc/config` commits nothing — a
-teammate cloning the repo would get no remote at all. What actually works is to declare
-the remote at project level and keep only the secret local:
+**Problem I had:** the lab says `dvc remote add --global origin ...`. That puts the remote URL in my user config too, so `.dvc/config` stays empty and `git add .dvc/config` commits nothing. Someone cloning the repo would not get the remote. So I added the remote at project level and only kept the secrets local:
 
 ```bash
-dvc remote add -d origin https://dagshub.com/englaetitia/mlops-lab-1.dvc   # -> .dvc/config, committed
-dvc remote modify origin --local auth basic                                # -> .dvc/config.local
+dvc remote add -d origin https://dagshub.com/englaetitia/mlops-lab-1.dvc   # goes to .dvc/config (committed)
+dvc remote modify origin --local auth basic                                # goes to .dvc/config.local
 dvc remote modify origin --local user englaetitia
 dvc remote modify origin --local password <dagshub-token>
 ```
 
-## Question 4 — Take a look at the `.gitignore` file. Explain what happened.
+My committed `.dvc/config` only has the remote name and URL, no password.
 
-`dvc add data` appended a single line to the repository's `.gitignore`, which now reads:
+## Question 4 - Look at the `.gitignore` file. What happened?
+
+After `dvc add data`, a new line was added at the end of `.gitignore`:
 
 ```
 .venv/
 __pycache__/
 *.pyc
 data_local/
-/data          <- appended by dvc
+/data          <- added by dvc
 ```
 
-dvc wrote that last line itself. The reason is that git and dvc must never track the same bytes:
-if git also versioned `data/`, every image would go into the git object database and the
-repository would grow without bound, which is exactly what dvc exists to avoid. So dvc
-tells git to ignore the *content* and hands git a tiny pointer file (`data.dvc`) instead.
+dvc added `/data` itself, so git ignores the data folder. Git and dvc should not both track the same files. If git also stored the images, the repo would get huge, which is exactly what dvc is there to avoid.
 
-The division of labour after this line exists:
+So now:
+- **git** tracks `data.dvc`, a small text file
+- **dvc** tracks what is inside `data/`
 
-- **git** tracks `data.dvc` — 5 lines of YAML.
-- **dvc** tracks everything inside `data/` — via the cache and the remote.
+## Question 5 - Is there a `.dvc` file? What does it contain?
 
-## Question 5 — Do you see a `.dvc` file? What does it contain?
-
-Yes: `data.dvc` in the repository root. Full contents:
+Yes, `data.dvc` at the root of the repo:
 
 ```yaml
 outs:
@@ -146,18 +118,12 @@ outs:
   path: data
 ```
 
-165 files, 11,338,724 bytes (~10.8 MB) — described by five lines of YAML.
+- `path`: the folder it points to (`data`)
+- `md5`: the hash of the whole folder. The `.dir` at the end means it is a folder, not a single file.
+- `size` and `nfiles`: the total size (about 10.8 MB) and the number of files (165)
+- `hash`: the hash algorithm used (md5)
 
-| Field | Meaning |
-|---|---|
-| `path` | The workspace path this pointer describes. |
-| `md5` | The hash of the *directory as a whole*. The `.dir` suffix marks it as a directory hash rather than a file hash. |
-| `size` / `nfiles` | Total bytes and file count — used for progress reporting and sanity checks. |
-| `hash` | The algorithm in use. |
-
-The `.dir` hash is itself the name of an object in the local cache — here
-`.dvc/cache/files/md5/52/f75517b85801c97600836f5c134a1f.dir` — and that object is a JSON
-manifest of every file in the tree:
+This `.dir` hash is also the name of a file in the dvc cache (`.dvc/cache/files/md5/52/f75517b85801c97600836f5c134a1f.dir`). That file is a list of every image in the folder with its own md5:
 
 ```json
 [{"md5": "0053fd179e1fedbcb52e05a00b8a9ddd", "relpath": "food11_raw/evaluation/0_0.jpg"},
@@ -165,55 +131,38 @@ manifest of every file in the tree:
  ...]
 ```
 
-So one 5-line file committed to git resolves, through that manifest, to the exact content
-of all 165 images. Storage is also content-addressed rather than path-addressed, which
-means duplicate images are stored once no matter how many times they appear in the tree —
-renaming or moving a file costs nothing, while changing one byte of one image creates one
-new object and a new directory hash.
+So a 5-line file in git is enough to find the exact 165 images. dvc stores files by their content (the md5), not by their name. If two files are the same they are stored once. If I change one image, only that image gets a new hash, and so does the folder.
 
-## Question 6 — Check the main branch on GitHub. Is the code there? Is the data there? Is there a file that points to the data? And on DagsHub?
+## Question 6 - On GitHub: is the code there? Is the data there? Is there a file pointing to the data? And on DagsHub?
 
-**On GitHub:** the code is there (`src/food11/*.py`, `pyproject.toml`, `uv.lock`,
-`.dvc/config`, `.dvcignore`, `.gitignore`). **The data is not** — there is no `data/`
-folder at all, because `/data` is gitignored. The file that points to it is **`data.dvc`**,
-visible at the repository root, containing the directory hash shown in Q5.
+**On GitHub:** the code is there (`src/food11/*.py`, `pyproject.toml`, `uv.lock`, `.dvc/config`, `.dvcignore`, `.gitignore`). **The data is not**: there is no `data/` folder because it is in `.gitignore`. The file that points to the data is **`data.dvc`**.
 
-**On DagsHub:** the data *is* there, under the repository's "Data"/DVC view. On disk the
-remote is not a readable `training/`, `evaluation/`, `validation/` tree — it is a
-content-addressed store:
+**On DagsHub:** the data is there, in the repo's Data / DVC section. The remote doesn't store a normal folder tree. It stores files named by their md5, like:
 
 ```
 files/md5/75/a8cc6472c5c69bde883e466d379c5d
 files/md5/87/dc163017b8644662e06e3a04947b1c
-...
 ```
 
-each object named by the first two hex characters of its md5 plus the rest. DagsHub's web
-UI reads the `.dir` manifest and renders the human-readable tree on top of it — which is
-exactly why DagsHub is convenient: one interface shows the git side and the dvc side of
-the same commit.
+(the first 2 characters of the hash are the folder name). DagsHub reads the `.dir` list and shows the normal folders in its web UI, so you see the code and the data of the same commit in one place.
 
-## Question 7 — Clone the repo in a new temporary folder. Do you see the data folder? What dvc command gets it?
+## Question 7 - Clone the repo in a new folder. Is the data folder there? Which dvc command gets it?
 
-**No.** A fresh clone contains the code and `data.dvc`, but no `data/` directory —
-git never had the content, only the pointer.
+**No.** The new clone has the code and `data.dvc`, but no `data/` folder, because git only has the pointer.
+
+To get the data:
 
 ```bash
 dvc pull
 ```
 
-`dvc pull` = `dvc fetch` (download the objects named by `data.dvc` from the remote into
-`.dvc/cache`) + `dvc checkout` (materialise them into the workspace at `data/`).
+`dvc pull` does two things: `dvc fetch` downloads the files listed in `data.dvc` from the remote into `.dvc/cache`, and `dvc checkout` puts them in `data/`.
 
-Use `dvc checkout` alone when the objects are already in the local cache — for example
-when switching between commits on a machine that has pulled before, which is the
-situation in Q8.
+If the files are already in the local cache, `dvc checkout` alone is enough. That is the case in Q8.
 
-## Question 8 — After `git checkout <old-commit>` and `dvc checkout`, do you still see `food11_processed` and `food11_processed_mini`?
+## Question 8 - After `git checkout <old-commit>` and `dvc checkout`, are `food11_processed` and `food11_processed_mini` still there?
 
-**No — and the two commands each do half the job, which is the point of the question.**
-
-Observed:
+**No, but only after `dvc checkout`.** Here is what I saw:
 
 ```
 > git log --oneline -- data.dvc
@@ -224,30 +173,24 @@ aa6540e Add food11_processed and food11_processed_mini
 HEAD is now at 7dd5c51 Track data folder with dvc
 
 > dir data
-food11_processed   food11_processed_mini   food11_raw      <- still there!
+food11_processed   food11_processed_mini   food11_raw      <- still there
 
 > type data.dvc
   md5: 52f75517b85801c97600836f5c134a1f.dir
-  nfiles: 165                                              <- the OLD pointer
+  nfiles: 165                                              <- old pointer
 
 > dvc checkout
 M       data\
 
 > dir data
-food11_raw                                                 <- now gone
+food11_raw                                                 <- now they are gone
 ```
 
-After `git checkout` alone the processed folders are **still on disk**. Git cannot remove
-them: they are gitignored, so from git's point of view they do not exist. What git *did*
-change is `data.dvc`, which now holds the older directory hash — the one recorded before
-the processed datasets existed.
+After `git checkout` alone, the processed folders are **still on disk**. Git can't remove them because they are ignored, so git doesn't know about them. Git only changed `data.dvc` back to the old hash.
 
-`dvc checkout` is what reconciles the workspace with that pointer. It reads the `.dir`
-manifest for the old hash, sees that `food11_processed/` and `food11_processed_mini/` are
-not in it, and deletes them, leaving only `food11_raw/`. Nothing is lost: the objects for
-the newer state stay in `.dvc/cache` and on the remote.
+Then `dvc checkout` makes `data/` match that old pointer. It sees that the processed folders are not in the old version, so it removes them and only `food11_raw/` stays. Nothing is lost, the newer files are still in `.dvc/cache` and on DagsHub.
 
-Returning to the latest state restores them:
+Going back to main brings them back:
 
 ```
 > git checkout main
@@ -258,21 +201,13 @@ M       data\
 food11_processed   food11_processed_mini   food11_raw
 ```
 
-330 files (165 processed + 165 mini) restored in about one second, with no network
-access at all — they were still sitting in `.dvc/cache`. `dvc checkout` only downloads
-when the cache is missing an object, which is why the fresh-clone case in Q7 needed
-`dvc pull` instead.
+330 files (165 processed + 165 mini) came back in about one second without internet, because they were still in the local cache. That's also why a fresh clone (Q7) needs `dvc pull` and not just `dvc checkout`.
 
-**The lesson:** `git checkout` moves the code *and the pointer*; `dvc checkout` moves the
-data to match the pointer. Doing only the first leaves you running old code against new
-data — a silent, very hard-to-debug class of ML bug, and precisely what this pairing
-prevents.
+**What I learned:** `git checkout` changes the code and the pointer, and `dvc checkout` changes the data to match the pointer. If you only do the first one, you run old code on new data without noticing.
 
 ---
 
-## Final state
-
-After processing, `data.dvc` reads:
+## Final state at the end of lab 1
 
 ```yaml
 outs:
@@ -283,30 +218,20 @@ outs:
   path: data
 ```
 
-495 files = 165 raw + 165 processed + 165 mini, 13.0 MB on disk — and the entire git
-repository is still nothing but text: source files, `pyproject.toml`, `uv.lock`,
-`.dvc/config`, and those five lines of YAML.
+495 files = 165 raw + 165 processed + 165 mini (about 13 MB). The git repo itself is still only text: code, `pyproject.toml`, `uv.lock`, `.dvc/config` and this small `data.dvc`.
 
-## Files produced in this lab
+(In lab 2 I rebuilt the processed datasets bigger so the model could actually train, so the current `data.dvc` has 9635 files. That is explained in `lab2.md`.)
 
-| File | Purpose |
-|---|---|
-| `src/food11/subset_raw.py` | Builds the reduced `data/food11_raw` (5 images per category per split) from the full `data_local/food11_raw`. Needed because of the Solution 2 choice above. |
-| `src/food11/data.py` | The lab's required script: resizes every image to 128x128 and rewrites the flat raw tree into the `<split>/<Category>/` layout that `torchvision.datasets.ImageFolder` (and therefore ResNet) expects; produces `food11_processed` and `food11_processed_mini`. |
-| `lab/lab1.md` | This file. |
+## Files I made in this lab
 
-### Note on `food11_processed_mini`
+- `src/food11/subset_raw.py`: makes the small `data/food11_raw` (5 images per category per split) from the full dataset in `data_local/food11_raw`. Needed because I chose solution 2.
+- `src/food11/data.py`: the script asked in the lab. It resizes every image to 128x128 and puts each image in a folder named after its category (`<split>/<Category>/`), which is the layout `torchvision.datasets.ImageFolder` (and so ResNet training) needs. It creates `food11_processed` and `food11_processed_mini`.
+- `lab/lab1.md`: this report.
 
-`data.py` caps the mini dataset at 100 images per category, as specified. Because the
-dvc-tracked raw set only holds 5 images per category, `food11_processed_mini` is
-identical to `food11_processed` here by construction. To see the two diverge, run:
+**About `food11_processed_mini`:** `data.py` keeps at most 100 images per category in the mini dataset. Since my dvc raw data only has 5 per category, mini and processed were the same at this point. To see a difference you can run:
 
 ```bash
 uv run python ./src/food11/data.py --mini-per-category 2
-```
-
-or point the script at the full local dataset:
-
-```bash
+# or use the full dataset:
 uv run python ./src/food11/data.py --source data_local/food11_raw
 ```
