@@ -117,6 +117,44 @@ On my first run, `test` failed, and `smoke` was shown as **skipped**: with `need
 
 Without `needs`, all jobs start at the same time on different runners. `smoke` would build and test the image even if the unit tests failed, which wastes minutes, and the results would be confusing (smoke green, test red). Worse, a `push` job without `needs` could push an image of broken code to the registry.
 
+## Question 6 - How long did the run take? Second run with an empty commit: which step got faster, and why?
+
+> TO FILL after GitHub Actions is unlocked: total time of run 1 and run 2, and the time of `uv sync --frozen` in each.
+
+Every run starts on a fresh, empty machine, so nothing from the previous run is there unless it is cached. In the `test` job, `astral-sh/setup-uv` has `enable-cache: true`: at the end of the first run it saves uv's download cache (the wheels of torch, mlflow, numpy...), keyed on `uv.lock`. In the second run `uv.lock` didn't change, so the cache is restored and **`uv sync --frozen`** doesn't download everything again, it only installs from the cache. That's the step that gets faster. The `smoke` job uses a plain `docker build` with no cache, so it takes about the same time each run.
+
+## Question 7 - Why tag the image with the commit SHA and not `latest`? A situation where `latest` makes two machines run different code.
+
+`latest` is just a name that moves: every new push overwrites it. The commit SHA never changes, and it points to exactly one version of the code. With the SHA I always know which commit an image was built from, and I can go back to an old image just by using its tag. This answers Q9 of lab 3 (an immutable tag that another machine can pull).
+
+**Example:** on Monday, server A does `docker pull food11-api:latest` and gets the image of commit `abc123`. On Tuesday I push a change to `serve.py` (commit `def456`), CI pushes a new `latest`. On Wednesday, server B starts and pulls `latest`: it gets `def456`. Now A and B both say they run `latest`, but they run different code. If B has a bug, I can't easily tell which code is running where, and I can't roll back to "the old `latest`" because it was overwritten. With `ghcr.io/englaetitia/mlops-lab-1:abc123`, both machines run exactly what I asked for.
+
+## Question 8 - Why does the `push` job declare `permissions:`? What could a compromised step do with a token that can write everything?
+
+`GITHUB_TOKEN` is created for each run, and `permissions:` sets what it is allowed to do. The `push` job only needs two things: read the code (`contents: read`) and write to the registry (`packages: write`). Writing them explicitly follows the **least privilege** idea: the token can't do more than the job needs.
+
+The job uses actions written by other people (`docker/login-action`, `docker/build-push-action`...). If one of them were compromised (for example a bad new version), it would run with my token. With write access to everything, it could:
+- push code to `main` directly, for example add a backdoor in `serve.py`
+- change `.github/workflows/ci.yml` so that every future run does something bad
+- create or delete branches, tags and releases, or change issues and pull requests
+- publish a malicious image under my name
+
+With only `contents: read` and `packages: write`, the worst it can do is limited to the registry, and the code itself stays safe.
+
+## Question 9 - Pull request with a broken test: what does the page show? Could you still merge? What does it change for a team?
+
+Branch protection rule on `main` (Settings → Branches): **Require a pull request before merging** (without required approvals, since I work alone) and **Require status checks to pass before merging** with the checks `test` and `smoke`.
+
+On a branch `break-test` I made `category_from_filename` return the wrong class, pushed it and opened a pull request.
+
+> TO FILL after GitHub Actions is unlocked: screenshot of the pull request page.
+
+The pull request page shows the checks running, then `ci / test` failing (red) and `ci / smoke` skipped, with the message that required checks have not passed, and the **Merge** button is blocked. A normal contributor cannot merge. As the repo owner (admin) I still see an option to bypass the rule and merge anyway, because I didn't enable "Do not allow bypassing the above settings"; in a real team that option would be on so nobody can skip the checks.
+
+What it changes for a team: with "everybody runs the tests on their laptop before pushing", the tests only run if each person remembers, on their own machine with their own setup, and nobody can see if they did. With required checks, the tests always run, in the same clean environment, on every pull request, and the result is visible to everyone. Broken code can't reach `main`, so `main` is always in a working state, and the review can focus on the change itself instead of "did you run the tests?".
+
+Then I fixed the test, pushed again on the same branch, the checks turned green and I merged.
+
 ## The quality gate (`promote.py`)
 
 `src/food11/promote.py --version <n>`:
@@ -161,24 +199,6 @@ One limit of this comparison: the champion's 0.7783 was measured on the **old** 
 
 1. **Put MLflow somewhere the runner can reach.** DagsHub gives a hosted MLflow server for each repo. If I log my runs there instead of to my laptop, a GitHub workflow can run `promote.py` with `MLFLOW_TRACKING_URI` pointing to DagsHub and the token stored as a GitHub secret. It can be started by hand (`workflow_dispatch`) or on a schedule.
 2. **Run it where MLflow is.** Either call `promote.py` at the end of the training script/pipeline on my machine (for example as the last stage of a `dvc.yaml` pipeline, after training and registering), or install a **self-hosted GitHub runner** on my laptop (or a server next to MLflow). The workflow then runs on that machine, which can reach `http://127.0.0.1:5000`.
-
-## Question 7 - Why tag the image with the commit SHA and not `latest`? A situation where `latest` makes two machines run different code.
-
-`latest` is just a name that moves: every new push overwrites it. The commit SHA never changes, and it points to exactly one version of the code. With the SHA I always know which commit an image was built from, and I can go back to an old image just by using its tag. This answers Q9 of lab 3 (an immutable tag that another machine can pull).
-
-**Example:** on Monday, server A does `docker pull food11-api:latest` and gets the image of commit `abc123`. On Tuesday I push a change to `serve.py` (commit `def456`), CI pushes a new `latest`. On Wednesday, server B starts and pulls `latest`: it gets `def456`. Now A and B both say they run `latest`, but they run different code. If B has a bug, I can't easily tell which code is running where, and I can't roll back to "the old `latest`" because it was overwritten. With `ghcr.io/englaetitia/mlops-lab-1:abc123`, both machines run exactly what I asked for.
-
-## Question 8 - Why does the `push` job declare `permissions:`? What could a compromised step do with a token that can write everything?
-
-`GITHUB_TOKEN` is created for each run, and `permissions:` sets what it is allowed to do. The `push` job only needs two things: read the code (`contents: read`) and write to the registry (`packages: write`). Writing them explicitly follows the **least privilege** idea: the token can't do more than the job needs.
-
-The job uses actions written by other people (`docker/login-action`, `docker/build-push-action`...). If one of them were compromised (for example a bad new version), it would run with my token. With write access to everything, it could:
-- push code to `main` directly, for example add a backdoor in `serve.py`
-- change `.github/workflows/ci.yml` so that every future run does something bad
-- create or delete branches, tags and releases, or change issues and pull requests
-- publish a malicious image under my name
-
-With only `contents: read` and `packages: write`, the worst it can do is limited to the registry, and the code itself stays safe.
 
 ## Question 12 - The pipeline from `git push` to a running container
 
